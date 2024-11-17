@@ -24,16 +24,35 @@ partial class Form1
     #region Windows Form Designer generated code
 
     /// <summary>
-    ///  Required method for Designer support - do not modify
-    ///  the contents of this method with the code editor.
+    /// Required method for Designer support - do not modify
+    /// the contents of this method with the code editor.
     /// </summary>
     private void InitializeComponent()
     {
-        this.components = new System.ComponentModel.Container();
-        this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-        this.ClientSize = new System.Drawing.Size(800, 450);
-        this.Text = "Form1";
+        LoginButton = new System.Windows.Forms.Button();
+        SuspendLayout();
+        // 
+        // LoginButton
+        // 
+        LoginButton.Location = new System.Drawing.Point(205, 70);
+        LoginButton.Name = "LoginButton";
+        LoginButton.Size = new System.Drawing.Size(385, 304);
+        LoginButton.TabIndex = 0;
+        LoginButton.Text = "ログインボタン";
+        LoginButton.UseVisualStyleBackColor = true;
+        LoginButton.Click += LoginButton_Click;
+        // 
+        // Form1
+        // 
+        AutoScaleDimensions = new System.Drawing.SizeF(7F, 15F);
+        AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+        ClientSize = new System.Drawing.Size(800, 450);
+        Controls.Add(LoginButton);
+        Text = "Form1";
+        ResumeLayout(false);
     }
+
+    private System.Windows.Forms.Button LoginButton;
 
     #endregion
 }

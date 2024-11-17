@@ -14,7 +14,7 @@ static class Program
     /// </summary>
     public const string ADDRESS = "https://localhost:7232";
     [STAThread]
-    static void Main()
+    static async Task Main()
     {
         var host = new HostBuilder()
             .ConfigureLogging(options => options.AddDebug())
@@ -75,14 +75,15 @@ static class Program
                 // and adding the registry entries required to register the custom URI scheme.
                 //
                 // Note: in a real world application, this step should be part of a setup script.
-                // services.AddHostedService<Worker>();
+                services.AddHostedService<Worker>();
 
             })
+            .ConfigureWinForms<Form1>()
             .UseWinFormsLifetime()
             .Build();
         // To customize application configuration such as set high DPI settings or default font,
         // see https://aka.ms/applicationconfiguration.
         ApplicationConfiguration.Initialize();
-        Application.Run(new Form1());
+        await host.RunAsync(); 
     }
 }
