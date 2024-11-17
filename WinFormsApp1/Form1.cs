@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Net.Http.Headers;
 using System.Security.Claims;
 using Dapplo.Microsoft.Extensions.Hosting.WinForms;
+using Microsoft.AspNetCore.SignalR.Client;
 using OpenIddict.Abstractions;
 using OpenIddict.Client;
 
@@ -15,6 +17,7 @@ public partial class Form1 : Form, IWinFormsShell
         _service = service;
         InitializeComponent();
     }
+
     private async void LoginButton_Click(object sender, EventArgs e)
     {
         // Disable the login button to prevent concurrent authentication operations.
@@ -60,7 +63,8 @@ public partial class Form1 : Form, IWinFormsShell
                 });
             }
 
-            catch (OpenIddictExceptions.ProtocolException exception) when (exception.Error is OpenIddictConstants.Errors.AccessDenied)
+            catch (OpenIddictExceptions.ProtocolException exception) when (exception.Error is OpenIddictConstants.Errors
+                                                                               .AccessDenied)
             {
                 TaskDialog.ShowDialog(new TaskDialogPage
                 {
@@ -89,5 +93,28 @@ public partial class Form1 : Form, IWinFormsShell
             // Re-enable the login button to allow starting a new authentication operation.
             LoginButton.Enabled = true;
         }
+    }
+
+    private static async Task ExampleSignalR(string token, CancellationToken cancellationToken)
+    {
+        await using var client = new HubConnectionBuilder()
+            .WithUrl($"{Program.ADDRESS}/hub/train?access_token={token}")
+            .WithAutomaticReconnect()
+            .Build();
+        await client.StartAsync(cancellationToken);
+        var resource = await client.InvokeAsync<int>("Emit", cancellationToken);
+    }
+
+    private static async Task<string> GetResourceAsync(string token, CancellationToken cancellationToken)
+    {
+        using var client = new HttpClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{Program.ADDRESS}/me");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        using var response = await client.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadAsStringAsync(cancellationToken);
     }
 }
