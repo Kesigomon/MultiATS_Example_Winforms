@@ -12,7 +12,7 @@ static class Program
     /// <summary>
     ///  The main entry point for the application.
     /// </summary>
-    public const string ADDRESS = "https://localhost:7232";
+    public const string ADDRESS = "";
     [STAThread]
     static async Task Main()
     {
