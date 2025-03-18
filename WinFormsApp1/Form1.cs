@@ -54,6 +54,7 @@ public partial class Form1 : Form, IWinFormsShell
 
             catch (OperationCanceledException)
             {
+                // タイムアウト
                 TaskDialog.ShowDialog(new TaskDialogPage
                 {
                     Caption = "Authentication timed out",
@@ -63,9 +64,10 @@ public partial class Form1 : Form, IWinFormsShell
                 });
             }
 
-            catch (OpenIddictExceptions.ProtocolException exception) when (exception.Error is OpenIddictConstants.Errors
-                                                                               .AccessDenied)
+            catch (OpenIddictExceptions.ProtocolException exception) when (exception.Message ==
+                                                                           OpenIddictConstants.Errors.AccessDenied)
             {
+                // ログインしたユーザーがサーバーにいないか、入鋏ロールがついてない
                 TaskDialog.ShowDialog(new TaskDialogPage
                 {
                     Caption = "Authorization denied",
@@ -74,9 +76,21 @@ public partial class Form1 : Form, IWinFormsShell
                     Text = "The authorization was denied by the end user."
                 });
             }
-
+            catch (OpenIddictExceptions.ProtocolException exception) when (exception.Message ==
+                                                                           OpenIddictConstants.Errors.ServerError)
+            {
+                // サーバーでトラブル発生
+                TaskDialog.ShowDialog(new TaskDialogPage
+                {
+                    Caption = "Invalid request",
+                    Heading = "Invalid request",
+                    Icon = TaskDialogIcon.Warning,
+                    Text = "The authentication request was invalid."
+                });
+            }
             catch (Exception exception)
             {
+                // 予期しないエラー
                 Debug.WriteLine(exception);
                 TaskDialog.ShowDialog(new TaskDialogPage
                 {
@@ -101,7 +115,16 @@ public partial class Form1 : Form, IWinFormsShell
             .WithUrl($"{Program.ADDRESS}/hub/train?access_token={token}")
             .WithAutomaticReconnect()
             .Build();
-        await client.StartAsync(cancellationToken);
+        try
+        {
+            await client.StartAsync(cancellationToken);
+        }
+        // 該当Hubにアクセスするためのロールが無いときのエラー 
+        catch (HttpRequestException e) when (e.StatusCode == HttpStatusCode.Forbidden)
+        {
+            Console.WriteLine("Forbidden");
+            return;
+        }
         var resource = await client.InvokeAsync<int>("Emit", cancellationToken);
     }
 
