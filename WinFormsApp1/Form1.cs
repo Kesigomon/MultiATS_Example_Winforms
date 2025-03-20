@@ -65,7 +65,7 @@ public partial class Form1 : Form, IWinFormsShell
             }
 
             catch (OpenIddictExceptions.ProtocolException exception) when (exception.Message ==
-                                                                           OpenIddictConstants.Errors.AccessDenied)
+                                                                           OpenIddictConstants.Errors.UnauthorizedClient)
             {
                 // ログインしたユーザーがサーバーにいないか、入鋏ロールがついてない
                 TaskDialog.ShowDialog(new TaskDialogPage
