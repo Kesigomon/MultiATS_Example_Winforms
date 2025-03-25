@@ -64,7 +64,7 @@ public partial class Form1 : Form, IWinFormsShell
                 });
             }
 
-            catch (OpenIddictExceptions.ProtocolException exception) when (exception.Message ==
+            catch (OpenIddictExceptions.ProtocolException exception) when (exception.Error ==
                                                                            OpenIddictConstants.Errors.UnauthorizedClient)
             {
                 // ログインしたユーザーがサーバーにいないか、入鋏ロールがついてない
@@ -76,7 +76,7 @@ public partial class Form1 : Form, IWinFormsShell
                     Text = "The authorization was denied by the end user."
                 });
             }
-            catch (OpenIddictExceptions.ProtocolException exception) when (exception.Message ==
+            catch (OpenIddictExceptions.ProtocolException exception) when (exception.Error ==
                                                                            OpenIddictConstants.Errors.ServerError)
             {
                 // サーバーでトラブル発生
