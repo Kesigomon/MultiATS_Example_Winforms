@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Claims;
 using Dapplo.Microsoft.Extensions.Hosting.WinForms;
@@ -11,6 +12,11 @@ namespace WinFormsApp1;
 public partial class Form1 : Form, IWinFormsShell
 {
     private readonly OpenIddictClientService _service;
+    #nullable enable
+    private HubConnection? _connection;
+    #nullable disable
+    private string _token = "";
+    private string _refreshToken = "";
 
     public Form1(OpenIddictClientService service)
     {
@@ -32,7 +38,10 @@ public partial class Form1 : Form, IWinFormsShell
                 // Ask OpenIddict to initiate the authentication flow (typically, by starting the system browser).
                 var result = await _service.ChallengeInteractivelyAsync(new()
                 {
-                    CancellationToken = source.Token
+                    CancellationToken = source.Token,
+                    Scopes = [
+                        OpenIddictConstants.Scopes.OfflineAccess
+                    ]
                 });
 
                 // Wait for the user to complete the authorization process.
@@ -41,9 +50,10 @@ public partial class Form1 : Form, IWinFormsShell
                     CancellationToken = source.Token,
                     Nonce = result.Nonce
                 });
-                var token = resultAuth.BackchannelAccessToken;
-
-                TaskDialog.ShowDialog(new TaskDialogPage
+                _token = resultAuth.BackchannelAccessToken;
+                _refreshToken = resultAuth.RefreshToken;
+                await ExampleSignalR(source.Token);
+                TaskDialog.ShowDialog(new()
                 {
                     Caption = "Authentication successful",
                     Heading = "Authentication successful",
@@ -91,7 +101,8 @@ public partial class Form1 : Form, IWinFormsShell
             catch (Exception exception)
             {
                 // 予期しないエラー
-                Debug.WriteLine(exception);
+                Debug.WriteLine("An unexpected error occurred during authentication: " + exception);
+                Debug.WriteLine(exception.StackTrace);
                 TaskDialog.ShowDialog(new TaskDialogPage
                 {
                     Caption = "Authentication failed",
@@ -109,23 +120,69 @@ public partial class Form1 : Form, IWinFormsShell
         }
     }
 
-    private static async Task ExampleSignalR(string token, CancellationToken cancellationToken)
+    private async Task RefreshTokenAsync(CancellationToken cancellationToken)
     {
-        await using var client = new HubConnectionBuilder()
-            .WithUrl($"{Program.ADDRESS}/hub/train?access_token={token}")
-            .WithAutomaticReconnect()
-            .Build();
         try
         {
-            await client.StartAsync(cancellationToken);
+            var result = await _service.AuthenticateWithRefreshTokenAsync(new()
+            {
+                CancellationToken = cancellationToken,
+                RefreshToken = _refreshToken
+            });
+
+            _token = result.AccessToken;
+            _refreshToken = result.RefreshToken;
+            Debug.WriteLine($"Token refreshed successfully");
         }
-        // 該当Hubにアクセスするためのロールが無いときのエラー 
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to refresh token: {ex.Message}");
+            throw;
+        }
+    }
+
+    private async Task ExampleSignalR(CancellationToken cancellationToken)
+    {
+        if (_connection != null)
+        {
+            await _connection.StopAsync(cancellationToken);
+            await _connection.DisposeAsync();
+            _connection = null;
+        }
+
+        try
+        {
+            var client = new HubConnectionBuilder()
+                .WithUrl($"{Program.ADDRESS}/hub/tid?access_token={_token}")
+                .Build();
+
+            await client.StartAsync(cancellationToken);
+            // Refresh the token before reconnecting
+            await RefreshTokenAsync(cancellationToken);
+            client.Closed += async (error) =>
+            {
+                Debug.WriteLine($"SignalR disconnected");
+                if (error == null)
+                {
+                    return;
+                }
+                Debug.WriteLine($"Error: {error.Message} {error.StackTrace}");
+                var cancellationToken = new CancellationTokenSource(TimeSpan.FromSeconds(90)).Token;
+                await RefreshTokenAsync(cancellationToken);
+                await ExampleSignalR(cancellationToken);
+            };
+            _connection = client;
+        }
         catch (HttpRequestException e) when (e.StatusCode == HttpStatusCode.Forbidden)
         {
             Console.WriteLine("Forbidden");
             return;
         }
-        var resource = await client.InvokeAsync<int>("Emit", cancellationToken);
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Error during SignalR connection: {ex.Message}");
+            throw;
+        }
     }
 
     private static async Task<string> GetResourceAsync(string token, CancellationToken cancellationToken)
