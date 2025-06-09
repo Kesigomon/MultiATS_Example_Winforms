@@ -18,6 +18,9 @@ public partial class Form1 : Form, IWinFormsShell
     private string _token = "";
     private string _refreshToken = "";
 
+    // 再接続間隔（ミリ秒）
+    private const int ReconnectIntervalMs = 5000;
+
     public Form1(OpenIddictClientService service)
     {
         _service = service;
@@ -43,14 +46,12 @@ public partial class Form1 : Form, IWinFormsShell
 
     private async Task InteractiveAuthenticateAsync(CancellationToken cancellationToken)
     {
-        using var source = new CancellationTokenSource(delay: TimeSpan.FromSeconds(90));
-
         try
         {
             // Ask OpenIddict to initiate the authentication flow (typically, by starting the system browser).
             var result = await _service.ChallengeInteractivelyAsync(new()
             {
-                CancellationToken = source.Token,
+                CancellationToken = cancellationToken,
                 Scopes =
                 [
                     OpenIddictConstants.Scopes.OfflineAccess
@@ -60,12 +61,12 @@ public partial class Form1 : Form, IWinFormsShell
             // Wait for the user to complete the authorization process.
             var resultAuth = await _service.AuthenticateInteractivelyAsync(new()
             {
-                CancellationToken = source.Token,
+                CancellationToken = cancellationToken,
                 Nonce = result.Nonce
             });
             _token = resultAuth.BackchannelAccessToken;
             _refreshToken = resultAuth.RefreshToken;
-            await ExampleSignalR(source.Token);
+            await ExampleSignalR(cancellationToken);
             TaskDialog.ShowDialog(new()
             {
                 Caption = "Authentication successful",
@@ -126,6 +127,25 @@ public partial class Form1 : Form, IWinFormsShell
         }
     }
 
+    private static bool IsTokenExpired(string token)
+    {
+        if (string.IsNullOrEmpty(token))
+        {
+            return true;
+        }
+
+        var handler = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler();
+        if (!handler.CanReadToken(token))
+        {
+            return true;
+        }
+
+        var jwtToken = handler.ReadJwtToken(token);
+        var expiration = jwtToken.ValidTo;
+
+        return expiration < DateTime.UtcNow;
+    }
+
     private async Task RefreshTokenAsync(CancellationToken cancellationToken)
     {
         try
@@ -156,39 +176,99 @@ public partial class Form1 : Form, IWinFormsShell
             _connection = null;
         }
 
-        try
-        {
-            var client = new HubConnectionBuilder()
-                .WithUrl($"{Program.ADDRESS}/hub/tid?access_token={_token}")
-                .Build();
+        _connection = await StartSignalRConnectionAsync(_token, cancellationToken);
+    }
 
-            await client.StartAsync(cancellationToken);
-            // Refresh the token before reconnecting
-            await RefreshTokenAsync(cancellationToken);
-            client.Closed += async (error) =>
+    // HubConnection生成・Closed設定・StartAsync共通化
+    private async Task<HubConnection> StartSignalRConnectionAsync(string token, CancellationToken cancellationToken)
+    {
+        var client = new HubConnectionBuilder()
+            .WithUrl($"{Program.ADDRESS}/hub/tid?access_token={token}")
+            .Build();
+
+        client.Closed += async (error) =>
+        {
+            Debug.WriteLine($"SignalR disconnected");
+            _connection = await TryReconnectAsync(client);
+        };
+
+        await client.StartAsync(cancellationToken);
+        return client;
+    }
+
+    private async Task<(bool, HubConnection)> TryReconnectOnceAsync(HubConnection client)
+    {
+        // トークンが切れていない場合はそのまま再接続
+        if (!IsTokenExpired(_token))
+        {
+            try
             {
-                Debug.WriteLine($"SignalR disconnected");
-                if (error == null)
+                Debug.WriteLine("Try reconnect with current token...");
+                await client.StartAsync();
+                Debug.WriteLine("Reconnected with current token.");
+                return (true, client);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Reconnect failed: {ex.Message}");
+                return (false, client);
+            }
+        }
+        // トークンが切れていてリフレッシュトークンが有効な場合はリフレッシュ
+        else if (!IsTokenExpired(_refreshToken))
+        {
+            try
+            {
+                Debug.WriteLine("Try refresh token...");
+                var refreshCts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+                await RefreshTokenAsync(refreshCts.Token);
+                var newClient = await StartSignalRConnectionAsync(_token, CancellationToken.None);
+                await client.DisposeAsync(); // 古いクライアントを破棄
+                Debug.WriteLine("Reconnected with refreshed token.");
+                return (true, newClient);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Token refresh failed: {ex.Message}");
+                return (false, client);
+            }
+        }
+        // 両方切れている場合は再認証を促す
+        else
+        {
+            Debug.WriteLine("Both tokens expired. Prompting user to re-authenticate.");
+            TaskDialog.ShowDialog(new TaskDialogPage
+            {
+                Caption = "再認証が必要です",
+                Heading = "Discord再認証が必要です",
+                Icon = TaskDialogIcon.Warning,
+                Text = "認証情報の有効期限が切れました。再度ログインしてください。"
+            });
+            var reAuthenticateCts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+            if (InvokeRequired)
+            {
+                Invoke(() =>
                 {
-                    return;
-                }
+                    Task.Run(async () => await InteractiveAuthenticateAsync(reAuthenticateCts.Token));
+                });
+            }
+            else
+            {
+                await InteractiveAuthenticateAsync(reAuthenticateCts.Token);
+            }
+            return (true, client); // 再認証後はループを抜ける
+        }
+    }
 
-                Debug.WriteLine($"Error: {error.Message} {error.StackTrace}");
-                var cancellationToken = new CancellationTokenSource(TimeSpan.FromSeconds(90)).Token;
-                await RefreshTokenAsync(cancellationToken);
-                await ExampleSignalR(cancellationToken);
-            };
-            _connection = client;
-        }
-        catch (HttpRequestException e) when (e.StatusCode == HttpStatusCode.Forbidden)
+    private async Task<HubConnection> TryReconnectAsync(HubConnection client)
+    {
+        while (true)
         {
-            Console.WriteLine("Forbidden");
-            return;
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Error during SignalR connection: {ex.Message}");
-            throw;
+            var (success, newClient) = await TryReconnectOnceAsync(client);
+            client = newClient;
+            if (success)
+                return client;
+            await Task.Delay(ReconnectIntervalMs);
         }
     }
 
