@@ -35,6 +35,15 @@ public partial class Form1 : Form, IWinFormsShell
         try
         {
             await InteractiveAuthenticateAsync();
+            await DisposeAndStopConnectionAsync(CancellationToken.None); // 古いクライアントを破棄
+            InitializeConnection(); // 新しいクライアントを初期化
+            var isActionNeeded = await StartConnectionAsync(CancellationToken.None); // 新しいクライアントを開始
+            if (isActionNeeded)
+            {
+                Debug.WriteLine("Action needed after connection start.");
+                return;
+            }
+            SetEventHandlers(); // イベントハンドラを設定
         }
 
         finally
@@ -171,7 +180,7 @@ public partial class Form1 : Form, IWinFormsShell
     }
 
     // _connectionの開始とエラーハンドリング
-    private async Task StartConnectionAsync(CancellationToken cancellationToken)
+    private async Task<bool> StartConnectionAsync(CancellationToken cancellationToken)
     {
         if (_connection == null)
         {
@@ -181,7 +190,7 @@ public partial class Form1 : Form, IWinFormsShell
         try
         {
             await _connection.StartAsync(cancellationToken);
-            
+            return false;
         }
         // Todo: ロールが付与されてない場合のエラーハンドリング
         catch (Exception ex)
@@ -206,20 +215,20 @@ public partial class Form1 : Form, IWinFormsShell
                 return;
             }
             Debug.WriteLine($"Error: {error.Message}");
-            await TryReconnectAsync(_connection);
+            await TryReconnectAsync();
         };
     }
 
-    private async Task TryReconnectOnceAsync(HubConnection client)
+    private async Task<bool> TryReconnectOnceAsync()
     {
+        bool isActionNeeded;
         // トークンが切れていない場合はそのまま再接続
         if (_tokenExpiration > DateTimeOffset.UtcNow)
         {
             Debug.WriteLine("Try reconnect with current token...");
-            // Todo: トークンが切れていた場合はリフレッシュトークンを使う
-            await StartConnectionAsync(CancellationToken.None);
+            isActionNeeded = await StartConnectionAsync(CancellationToken.None);
             Debug.WriteLine("Reconnected with current token.");
-            return;
+            return isActionNeeded;
         }
         // トークンが切れていてリフレッシュトークンが有効な場合はリフレッシュ
         try
@@ -228,39 +237,62 @@ public partial class Form1 : Form, IWinFormsShell
             await RefreshTokenWithHandlingAsync(CancellationToken.None);
             await DisposeAndStopConnectionAsync(CancellationToken.None); // 古いクライアントを破棄
             InitializeConnection(); // 新しいクライアントを初期化
-            await StartConnectionAsync(CancellationToken.None); // 新しいクライアントを開始
+            isActionNeeded = await StartConnectionAsync(CancellationToken.None); // 新しいクライアントを開始
+            if (isActionNeeded)
+            {
+                return true; // アクションが必要な場合はtrueを返す
+            }
             SetEventHandlers(); // イベントハンドラを設定
             Debug.WriteLine("Reconnected with refreshed token.");
-            return;
+            return false; // アクションが必要ない場合はfalseを返す
         }
-        // Todo: リフレッシュトークンも切れている場合は再認証を促す
-        /*
-         * // 両方切れている場合は再認証を促す
-        Debug.WriteLine("Both tokens expired. Prompting user to re-authenticate.");
-        TaskDialog.ShowDialog(new TaskDialogPage
+        catch (OpenIddictExceptions.ProtocolException ex) when (ex.Error == OpenIddictConstants.Errors.InvalidGrant)
         {
-            Caption = "再認証が必要です",
-            Heading = "Discord再認証が必要です",
-            Icon = TaskDialogIcon.Warning,
-            Text = "認証情報の有効期限が切れました。再度ログインしてください。"
-        });
-        */
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Token refresh failed: {ex.Message}");
+            // リフレッシュトークンが無効な場合
+            // Todo: リフレッシュトークンも切れている場合は再認証を促す
+            Debug.WriteLine("Refresh token is invalid or expired.");
+            TaskDialog.ShowDialog(new TaskDialogPage
+            {
+                Caption = "再認証が必要です",
+                Heading = "Discord再認証が必要です",
+                Icon = TaskDialogIcon.Warning,
+                Text = "認証情報の有効期限が切れました。再度ログインしてください。"
+            });
+            await InteractiveAuthenticateAsync(CancellationToken.None);
+            await DisposeAndStopConnectionAsync(CancellationToken.None); // 古いクライアントを破棄
+            InitializeConnection(); // 新しいクライアントを初期化
+            isActionNeeded = await StartConnectionAsync(CancellationToken.None); // 新しいクライアントを開始
+            if (isActionNeeded)
+            {
+                return true; // アクションが必要な場合はtrueを返す
+            }
+            SetEventHandlers(); // イベントハンドラを設定
+            Debug.WriteLine("Reconnected after re-authentication.");
+            return false; // アクションが必要ない場合はfalseを返す
         }
-        
     }
 
-    private async Task TryReconnectAsync(HubConnection client)
+    private async Task TryReconnectAsync()
     {
         while (true)
         {
-            await TryReconnectOnceAsync(client);
+            try
+            {
+                var isActionNeeded = await TryReconnectOnceAsync();
+                if (isActionNeeded)
+                {
+                    Debug.WriteLine("Action needed after reconnection.");
+                    break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Reconnect failed: {ex.Message}");
+            }
             if (_connection != null && _connection.State == HubConnectionState.Connected)
             {
                 Debug.WriteLine("Reconnected successfully.");
-                return;
+                break;
             }
             await Task.Delay(ReconnectIntervalMs);
         }
