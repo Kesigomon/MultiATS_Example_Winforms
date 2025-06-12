@@ -38,12 +38,11 @@ public partial class Form1 : Form, IWinFormsShell
             await DisposeAndStopConnectionAsync(CancellationToken.None); // 古いクライアントを破棄
             InitializeConnection(); // 新しいクライアントを初期化
             var isActionNeeded = await StartConnectionAsync(CancellationToken.None); // 新しいクライアントを開始
-            if (isActionNeeded)
+            if (!isActionNeeded)
             {
-                Debug.WriteLine("Action needed after connection start.");
-                return;
+                SetEventHandlers(); // イベントハンドラを設定
             }
-            SetEventHandlers(); // イベントハンドラを設定
+            Debug.WriteLine("Action needed after connection start.");
         }
 
         finally
@@ -192,7 +191,18 @@ public partial class Form1 : Form, IWinFormsShell
             await _connection.StartAsync(cancellationToken);
             return false;
         }
-        // Todo: ロールが付与されてない場合のエラーハンドリング
+        catch (HttpRequestException exception) when (exception.StatusCode == HttpStatusCode.Forbidden)
+        {
+            // 該当Hubにアクセスするためのロールが無い
+            TaskDialog.ShowDialog(new TaskDialogPage
+            {
+                Caption = "Authentication failed",
+                Heading = "Authentication failed",
+                Icon = TaskDialogIcon.Error,
+                Text = "Authentication is successful, but you do not have the required role to access this hub. Please check your permissions."
+            });
+            return true; // アクションが必要な場合はtrueを返す
+        }
         catch (Exception ex)
         {
             Debug.WriteLine($"Failed to start SignalR connection: {ex.Message}");
@@ -249,7 +259,6 @@ public partial class Form1 : Form, IWinFormsShell
         catch (OpenIddictExceptions.ProtocolException ex) when (ex.Error == OpenIddictConstants.Errors.InvalidGrant)
         {
             // リフレッシュトークンが無効な場合
-            // Todo: リフレッシュトークンも切れている場合は再認証を促す
             Debug.WriteLine("Refresh token is invalid or expired.");
             TaskDialog.ShowDialog(new TaskDialogPage
             {
