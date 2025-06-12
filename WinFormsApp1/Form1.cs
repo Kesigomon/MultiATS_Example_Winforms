@@ -191,6 +191,7 @@ public partial class Form1 : Form, IWinFormsShell
             await _connection.StartAsync(cancellationToken);
             return false;
         }
+        // Todo: 再接続時、ダイアログを出して再接続するか聞く
         catch (HttpRequestException exception) when (exception.StatusCode == HttpStatusCode.Forbidden)
         {
             // 該当Hubにアクセスするためのロールが無い
@@ -201,12 +202,22 @@ public partial class Form1 : Form, IWinFormsShell
                 Icon = TaskDialogIcon.Error,
                 Text = "Authentication is successful, but you do not have the required role to access this hub. Please check your permissions."
             });
+            
             return true; // アクションが必要な場合はtrueを返す
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"Failed to start SignalR connection: {ex.Message}");
-            throw;
+            // 予期しないエラー
+            TaskDialog.ShowDialog(new TaskDialogPage
+            {
+                Caption = "Connection failed",
+                Heading = "Connection failed",
+                Icon = TaskDialogIcon.Error,
+                Text = "An error occurred while trying to connect to the SignalR hub."
+            });
+            return true; // アクションが必要な場合はtrueを返す
+            
         }
     }
 
