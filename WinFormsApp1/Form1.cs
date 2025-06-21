@@ -10,6 +10,8 @@ namespace WinFormsApp1;
 
 public partial class Form1 : Form, IWinFormsShell
 {
+    // 認証トークンの有効期限が切れる前にリフレッシュするためのマージン(接続断時、有効期限がこれよりも短い場合はリフレッシュを試みる)
+    private readonly TimeSpan _renewMargin = TimeSpan.FromMinutes(1);
     private readonly OpenIddictClientService _service;
 #nullable enable
     private HubConnection? _connection;
@@ -243,8 +245,8 @@ public partial class Form1 : Form, IWinFormsShell
     private async Task<bool> TryReconnectOnceAsync()
     {
         bool isActionNeeded;
-        // トークンが切れていない場合はそのまま再接続
-        if (_tokenExpiration > DateTimeOffset.UtcNow)
+        // トークンが切れていない場合 かつ 切れるまで余裕がある場合はそのまま再接続
+        if (_tokenExpiration > DateTimeOffset.UtcNow + _renewMargin)
         {
             Debug.WriteLine("Try reconnect with current token...");
             isActionNeeded = await StartConnectionAsync(CancellationToken.None);
